@@ -67,7 +67,8 @@ namespace ChatCommands
     public class ChatManager : MonoBehaviour
     {
         public static ChatManager instance;
-        public static Action onInit;
+        public delegate (string, ChatCommand[]) onInitHandler();
+        public static event onInitHandler onInit;
         private bool isInitialized = false;
 
         private TMP_InputField inputField;
@@ -87,29 +88,6 @@ namespace ChatCommands
 
         private List<string> mods = new List<string>();
         private List<ChatCommand> commands = new List<ChatCommand>();
-
-        public static void Create(string GUID = null, ChatCommand[] commands = null, Action<bool> canvasAction = null)
-        {
-            if (instance == null)
-            {
-                GameObject manager = new GameObject();
-                manager.name = "ChatCommandsManager";
-                manager.AddComponent<ChatManager>();
-                DontDestroyOnLoad(manager);
-            }
-            if (!instance.isInitialized) instance.Initialize();
-            if (GUID != null && commands != null && instance.isInitialized)
-            {
-                if (instance.mods.Contains(GUID)) return;
-                instance.mods.Add(GUID);
-                foreach (ChatCommand cmd in commands)
-                {
-                    cmd.mod = GUID;
-                    instance.commands.Add(cmd);
-                }
-                if (canvasAction != null) instance.canvasActions.Add(canvasAction);
-            }
-        }
 
         void Update()
         {
@@ -276,7 +254,17 @@ namespace ChatCommands
                 textPrefab.transform.SetParent(gameObject.transform);
                 isInitialized = true;
                 Plugin.logger.LogMessage($"{Plugin.modName} has been initialized.".ToString());
-                onInit?.Invoke();
+                foreach (Delegate del in onInit.GetInvocationList())
+                {
+                    (string, ChatCommand[]) args = ((string, ChatCommand[]))del.DynamicInvoke();
+                    if (instance.mods.Contains(args.Item1)) continue;
+                    instance.mods.Add(args.Item1);
+                    foreach (ChatCommand cmd in args.Item2)
+                    {
+                        cmd.mod = args.Item1;
+                        instance.commands.Add(cmd);
+                    }
+                }
             }
             else Plugin.logger.LogFatal("Failed to load essential GameObjects from the asset bundle.");
         }
@@ -305,8 +293,8 @@ namespace ChatCommands
 [BepInPlugin(modGUID, modName, modVer)]
 public class Plugin : BaseUnityPlugin
 {
-    internal const string modGUID = "BULLETBOT.ChatCommands";
-    internal const string modName = "Chat Commands";
+    internal const string modGUID = "BULLETBOT.ChatCommandsMono";
+    internal const string modName = "Chat Commands (Mono)";
     private const string modVer = "1.0.0";
 
     public static ManualLogSource logger;
@@ -323,6 +311,13 @@ public class Plugin : BaseUnityPlugin
         configModifierEnabled = Config.Bind("Keybinds", "Modifier Enabled", true);
         configModifier = Config.Bind("Keybinds", "Modifier Keybind", KeyCode.LeftControl);
         configToggle = Config.Bind("Keybinds", "Toggle Keybind", KeyCode.Q);
-        Universe.Init(delegate { ChatManager.Create(); });
+        Universe.Init(delegate
+        {
+            GameObject manager = new GameObject();
+            manager.name = "ChatCommandsManager";
+            manager.AddComponent<ChatManager>();
+            DontDestroyOnLoad(manager);
+            ChatManager.instance.Initialize();
+        });
     }
 }
