@@ -12,6 +12,7 @@ using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using UniverseLib;
 using UniverseLib.Input;
@@ -21,6 +22,24 @@ namespace ChatCommands
     public static class ChatUtility
     {
         public static string Color(Color color) => $"<color=#{ColorUtility.ToHtmlStringRGB(color)}>";
+    }
+
+    public class ChatMessage
+    {
+        public object text;
+        public string name;
+        public Color color;
+        public int size;
+        public DateTime time;
+
+        public ChatMessage(object text, string name = null, Color color = default, int size = -1, DateTime time = default)
+        {
+            this.text = text;
+            this.name = name.IsNullOrWhiteSpace() ? "System" : name;
+            this.color = color == default ? new Color(1, 1, 1) : color;
+            this.size = size == -1 ? Plugin.configSize.Value : size;
+            this.time = time == default ? DateTime.Now : time;
+        }
     }
 
     public class ChatCommand
@@ -39,7 +58,7 @@ namespace ChatCommands
             this.method = method;
         }
 
-        public void Message(object text, Color color = default, int size = default)
+        public void Message(object text, Color color = default, int size = -1)
         {
             string newName = "";
             string[] splitName = name.Split('_');
@@ -55,7 +74,7 @@ namespace ChatCommands
         {
             try
             {
-                method.Invoke(this, args.Skip(1).ToArray());
+                method.Invoke(this, args);
             }
             catch (Exception e)
             {
@@ -74,17 +93,17 @@ namespace ChatCommands
         private TMP_InputField inputField;
         private Canvas canvas;
         private Transform content;
+        private GameObject chatWindow;
         private ScrollRect scrollRect;
-        private GameObject tempSelected;
-        private CursorLockMode tempState;
-
-        private List<Action<bool>> canvasActions = new List<Action<bool>>();
 
         private List<string> previousPrompts = new List<string>();
-        private int selectedPrompt = -1;
+        private int selectedPrompt;
 
+        private List<ChatMessage> previousTexts = new List<ChatMessage>();
         private GameObject textPrefab;
-        private int fontSize = 32;
+
+        private GameObject tempSelected;
+        private CursorLockMode tempCursor;
 
         private List<string> mods = new List<string>();
         private List<ChatCommand> commands = new List<ChatCommand>();
@@ -99,14 +118,13 @@ namespace ChatCommands
                 InputManager.GetKeyDown(Plugin.configToggle.Value)
                 )
             {
-                foreach (Action<bool> action in canvasActions) action.Invoke(canvas.enabled);
                 canvas.enabled = !canvas.enabled;
                 if (canvas.enabled)
                 {
                     selectedPrompt = -1;
                     inputField.text = null;
                     tempSelected = EventSystem.current.currentSelectedGameObject;
-                    tempState = Cursor.lockState;
+                    tempCursor = Cursor.lockState;
                     inputField.Select();
                     ScrollToBottom();
                 }
@@ -114,8 +132,8 @@ namespace ChatCommands
                 {
                     EventSystem.current.SetSelectedGameObject(tempSelected);
                     tempSelected = null;
-                    Cursor.lockState = tempState;
-                    tempState = default;
+                    Cursor.lockState = tempCursor;
+                    tempCursor = default;
                 }
             }
             if (canvas.enabled)
@@ -191,6 +209,7 @@ namespace ChatCommands
                     null,
                     delegate (ChatCommand _this, string[] _)
                     {
+                        previousTexts.Clear();
                         foreach (Transform message in content) Destroy(message.gameObject);
                         _this.Message("Chat has been cleared!");
                     }),
@@ -210,11 +229,18 @@ namespace ChatCommands
                         _this.Message(sb.ToString());
                     })
             });
+            CreateUI();
+            SceneManager.activeSceneChanged += delegate { CreateUI(); };
         }
 
-        private void Initialize()
+        private void CreateUI()
         {
-            if (isInitialized) return;
+            selectedPrompt = -1;
+            if (isInitialized)
+            {
+                Destroy(chatWindow);
+                Destroy(textPrefab);
+            }
             AssetBundle assetBundle = AssetBundle.LoadFromFile(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "assetbundle"));
             if (assetBundle == null)
             {
@@ -226,23 +252,24 @@ namespace ChatCommands
             GameObject text = assetBundle.LoadAsset<GameObject>("Text");
             if (chat != null && text != null)
             {
-                GameObject chatObject = Instantiate(chat);
-                chatObject.transform.SetParent(gameObject.transform);
-                Transform window = chatObject.transform.Find("Window");
+                chatWindow = Instantiate(chat);
+                chatWindow.transform.SetParent(gameObject.transform);
+                Transform window = chatWindow.transform.Find("Window");
                 content = window.Find("Scroll").Find("Viewport").Find("Content");
                 scrollRect = window.Find("Scroll").GetComponent<ScrollRect>();
                 scrollRect.scrollSensitivity = Plugin.configScroll.Value;
-                canvas = chatObject.GetComponent<Canvas>();
+                canvas = chatWindow.GetComponent<Canvas>();
                 canvas.enabled = false;
                 inputField = window.Find("Input").GetComponent<TMP_InputField>();
                 inputField.onSubmit.AddListener(delegate
                 {
                     if (!inputField.text.IsNullOrWhiteSpace())
                     {
-                        previousPrompts.Add(inputField.text);
+                        if (previousPrompts.Count == 0 || previousPrompts[previousPrompts.Count - 1] != inputField.text)
+                            previousPrompts.Add(inputField.text);
                         string[] args = inputField.text.Trim().Split(' ').Where(x => !x.IsNullOrWhiteSpace()).ToArray();
                         ChatCommand cmd = commands.FirstOrDefault(x => x.name == args[0]);
-                        if (cmd != null) cmd.Execute(args);
+                        if (cmd != null) cmd.Execute(args.Skip(1).ToArray());
                         else Message($"Command called '{args[0]}' does not exist.");
                     }
                     selectedPrompt = -1;
@@ -252,32 +279,43 @@ namespace ChatCommands
                 });
                 textPrefab = Instantiate(text);
                 textPrefab.transform.SetParent(gameObject.transform);
-                isInitialized = true;
-                Plugin.logger.LogMessage($"{Plugin.modName} has been initialized.".ToString());
-                foreach (Delegate del in onInit.GetInvocationList())
+                if (!isInitialized)
                 {
-                    (string, ChatCommand[]) args = ((string, ChatCommand[]))del.DynamicInvoke();
-                    if (instance.mods.Contains(args.Item1)) continue;
-                    instance.mods.Add(args.Item1);
-                    foreach (ChatCommand cmd in args.Item2)
+                    Plugin.logger.LogMessage($"{Plugin.modName} has been initialized.".ToString());
+                    if (onInit != null)
                     {
-                        cmd.mod = args.Item1;
-                        instance.commands.Add(cmd);
+                        foreach (Delegate del in onInit.GetInvocationList())
+                        {
+                            (string, ChatCommand[]) args = ((string, ChatCommand[]))del.DynamicInvoke();
+                            if (instance.mods.Contains(args.Item1)) continue;
+                            instance.mods.Add(args.Item1);
+                            foreach (ChatCommand cmd in args.Item2)
+                            {
+                                cmd.mod = args.Item1;
+                                instance.commands.Add(cmd);
+                            }
+                        }
                     }
+                    isInitialized = true;
+                }
+                else
+                {
+                    ChatMessage[] tempMessages = previousTexts.ToArray();
+                    previousTexts.Clear();
+                    foreach (ChatMessage message in tempMessages) Message(message.text, message.name, message.color, message.size, message.time);
                 }
             }
             else Plugin.logger.LogFatal("Failed to load essential GameObjects from the asset bundle.");
         }
 
-        public void Message(object text, string name = null, Color color = default, int size = default)
+        public void Message(object text, string name = null, Color color = default, int size = -1, DateTime time = default)
         {
-            if (color == default) color = new Color(1, 1, 1);
-            if (size == default) size = fontSize;
-            DateTime dateTime = DateTime.Now;
+            ChatMessage message = new ChatMessage(text, name, color, size, time);
+            previousTexts.Add(message);
             GameObject newText = Instantiate(textPrefab);
-            newText.GetComponent<TMP_Text>().text = $"{dateTime.ToLongTimeString()} {dateTime.ToShortDateString()} [{(name != null ? name : "System")}]:" +
-                $" {ChatUtility.Color(color)}{text}";
-            newText.GetComponent<TMP_Text>().fontSize = size;
+            newText.GetComponent<TMP_Text>().text = $"{message.time.ToLongTimeString()} {message.time.ToShortDateString()} [{message.name}]:" +
+                $" {ChatUtility.Color(message.color)}{message.text}";
+            newText.GetComponent<TMP_Text>().fontSize = message.size;
             newText.transform.SetParent(content);
             ScrollToBottom();
         }
@@ -293,13 +331,14 @@ namespace ChatCommands
 [BepInPlugin(modGUID, modName, modVer)]
 public class Plugin : BaseUnityPlugin
 {
-    internal const string modGUID = "BULLETBOT.ChatCommandsMono";
-    internal const string modName = "Chat Commands (Mono)";
+    internal const string modGUID = "BULLETBOT.ChatCommands";
+    internal const string modName = "Chat Commands";
     private const string modVer = "1.0.0";
 
     public static ManualLogSource logger;
 
     public static ConfigEntry<float> configScroll;
+    public static ConfigEntry<int> configSize;
     public static ConfigEntry<bool> configModifierEnabled;
     public static ConfigEntry<KeyCode> configModifier;
     public static ConfigEntry<KeyCode> configToggle;
@@ -308,16 +347,16 @@ public class Plugin : BaseUnityPlugin
     {
         logger = BepInEx.Logging.Logger.CreateLogSource(modName);
         configScroll = Config.Bind("General", "Scrolling Sensitivity", 40f);
+        configSize = Config.Bind("General", "Font Size", 32);
         configModifierEnabled = Config.Bind("Keybinds", "Modifier Enabled", true);
-        configModifier = Config.Bind("Keybinds", "Modifier Keybind", KeyCode.LeftControl);
-        configToggle = Config.Bind("Keybinds", "Toggle Keybind", KeyCode.Q);
+        configModifier = Config.Bind("Keybinds", "Modifier Button", KeyCode.LeftControl);
+        configToggle = Config.Bind("Keybinds", "Toggle Button", KeyCode.Q);
         Universe.Init(delegate
         {
             GameObject manager = new GameObject();
-            manager.name = "ChatCommandsManager";
-            manager.AddComponent<ChatManager>();
             DontDestroyOnLoad(manager);
-            ChatManager.instance.Initialize();
+            manager.name = "ChatCommandsManager";
+            ChatManager chat = manager.AddComponent<ChatManager>();
         });
     }
 }
