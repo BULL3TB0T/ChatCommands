@@ -37,7 +37,7 @@ namespace ChatCommands
             this.text = text;
             this.name = name.IsNullOrWhiteSpace() ? "System" : name;
             this.color = color == default ? new Color(1, 1, 1) : color;
-            this.size = size == -1 ? Plugin.configSize.Value : size;
+            this.size = size == -1 ? ChatCommandsPlugin.configSize.Value : size;
             this.time = time == default ? DateTime.Now : time;
         }
     }
@@ -113,11 +113,11 @@ namespace ChatCommands
         void Update()
         {
             if (!isInitialized && !isCreatingUI) return;
-            if (Plugin.configModifierEnabled.Value
+            if (ChatCommandsPlugin.configModifierEnabled.Value
                 ?
-                (InputManager.GetKey(Plugin.configModifier.Value) && InputManager.GetKeyDown(Plugin.configToggle.Value))
+                (InputManager.GetKey(ChatCommandsPlugin.configModifier.Value) && InputManager.GetKeyDown(ChatCommandsPlugin.configToggle.Value))
                 :
-                InputManager.GetKeyDown(Plugin.configToggle.Value)
+                InputManager.GetKeyDown(ChatCommandsPlugin.configToggle.Value)
                 )
             {
                 canvas.enabled = !canvas.enabled;
@@ -249,7 +249,7 @@ namespace ChatCommands
             assetBundle = AssetBundle.LoadFromFile(Path.Combine(Path.GetDirectoryName(location), Path.GetFileNameWithoutExtension(location)));
             if (assetBundle == null)
             {
-                Plugin.logger.LogFatal("An error occured while initializing. " +
+                ChatCommandsPlugin.logger.LogFatal("An error occured while initializing. " +
                     "(NOTE) 'Unable to read header from archive file' means you need to update the version of the asset bundle. Or missing file.");
                 return;
             }
@@ -262,7 +262,7 @@ namespace ChatCommands
                 Transform window = chatWindow.transform.Find("Window");
                 content = window.Find("Scroll").Find("Viewport").Find("Content");
                 scrollRect = window.Find("Scroll").GetComponent<ScrollRect>();
-                scrollRect.scrollSensitivity = Plugin.configScroll.Value;
+                scrollRect.scrollSensitivity = ChatCommandsPlugin.configScroll.Value;
                 canvas = chatWindow.GetComponent<Canvas>();
                 canvas.enabled = false;
                 inputField = window.Find("Input").GetComponent<TMP_InputField>();
@@ -286,7 +286,7 @@ namespace ChatCommands
                 textPrefab.transform.SetParent(gameObject.transform);
                 if (!isInitialized)
                 {
-                    Plugin.logger.LogMessage($"{Plugin.modName} has been initialized.".ToString());
+                    ChatCommandsPlugin.logger.LogMessage($"{ChatCommandsPlugin.modName} has been initialized.".ToString());
                     if (onInit != null)
                     {
                         foreach (Delegate del in onInit.GetInvocationList())
@@ -312,7 +312,7 @@ namespace ChatCommands
                 }
                 isCreatingUI = false;
             }
-            else Plugin.logger.LogFatal("Failed to load essential GameObjects from the asset bundle.");
+            else ChatCommandsPlugin.logger.LogFatal("Failed to load essential GameObjects from the asset bundle.");
         }
 
         public void Message(object text, string name = null, Color color = default, int size = -1, DateTime time = default)
@@ -336,7 +336,7 @@ namespace ChatCommands
 }
 
 [BepInPlugin(modGUID, modName, modVer)]
-public class Plugin : BaseUnityPlugin
+public class ChatCommandsPlugin : BaseUnityPlugin
 {
     internal const string modGUID = "BULLETBOT.ChatCommands";
     internal const string modName = "Chat Commands";
