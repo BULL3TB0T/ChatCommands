@@ -22,6 +22,38 @@ namespace ChatCommands
     public static class ChatUtility
     {
         public static string Color(Color color) => $"<color=#{ColorUtility.ToHtmlStringRGB(color)}>";
+
+        public static string Simplify(string name)
+        {
+            string newName = "";
+            string[] splitName = name.Split('_');
+            for (int i = 0; i < splitName.Length; i++)
+            {
+                string subName = splitName[i];
+                newName += subName.ToUpper().Substring(0, 1) + subName.ToLower().Substring(1, subName.Length - 1) + (i != (splitName.Length - 1) ? " " : null);
+            }
+            return newName;
+        }
+    }
+
+    public class ChatPlugin
+    {
+        public string name;
+        public string guid;
+        public Action updateAction;
+
+        public ChatPlugin(string name, string guid)
+        {
+            this.name = name;
+            this.guid = guid;
+        }
+
+        public ChatPlugin(string name, string guid, Action updateAction)
+        {
+            this.name = name;
+            this.guid = guid;
+            this.updateAction = updateAction;
+        }
     }
 
     public class ChatMessage
@@ -47,38 +79,39 @@ namespace ChatCommands
         public string name;
         public string description;
         public string example;
-        public string mod;
-        private Action<ChatCommand, string[]> action;
+        public ChatPlugin plugin;
+        private Action<string, string[]> executeAction;
 
-        public ChatCommand(string name, string description, string example, Action<ChatCommand, string[]> action)
+        public ChatCommand(string name, Action<string, string[]> executeAction)
+        {
+            this.name = name;
+            this.executeAction = executeAction;
+        }
+
+        public ChatCommand(string name, string description, Action<string, string[]> executeAction)
+        {
+            this.name = name;
+            this.description = description;
+            this.executeAction = executeAction;
+        }
+
+        public ChatCommand(string name, string description, string example, Action<string, string[]> executeAction)
         {
             this.name = name;
             this.description = description;
             this.example = example;
-            this.action = action;
-        }
-
-        public void Message(object text, Color color = default, int size = -1)
-        {
-            string newName = "";
-            string[] splitName = name.Split('_');
-            for (int i = 0; i < splitName.Length; i++)
-            {
-                string subName = splitName[i];
-                newName += subName.ToUpper().Substring(0, 1) + subName.ToLower().Substring(1, subName.Length - 1) + (i != (splitName.Length - 1) ? " " : null);
-            }
-            ChatManager.instance.Message(text, newName, color, size);
+            this.executeAction = executeAction;
         }
 
         public void Execute(string[] args)
         {
             try
             {
-                action.Invoke(this, args);
+                executeAction.Invoke(name, args);
             }
             catch (Exception e)
             {
-                Message(e.ToString(), new Color(1, 0, 0));
+                ChatManager.instance.Message(e.ToString(), ChatUtility.Simplify(name), new Color(1, 0, 0));
             }
         }
     }
@@ -86,7 +119,7 @@ namespace ChatCommands
     public class ChatManager : MonoBehaviour
     {
         public static ChatManager instance;
-        public delegate (string, ChatCommand[]) onInitHandler();
+        public delegate (ChatPlugin, ChatCommand[]) onInitHandler();
         public static event onInitHandler onInit;
         private bool isInitialized = false;
         private bool isCreatingUI = false;
@@ -107,7 +140,7 @@ namespace ChatCommands
         private GameObject tempSelected;
         private CursorLockMode tempCursor;
 
-        private List<string> mods = new List<string>();
+        private List<ChatPlugin> plugins = new List<ChatPlugin>();
         private List<ChatCommand> commands = new List<ChatCommand>();
 
         void Update()
@@ -149,17 +182,18 @@ namespace ChatCommands
                 {
                     if (upArrow && selectedPrompt < (previousPrompts.Count - 1)) selectedPrompt++;
                     else if (downArrow && selectedPrompt > -1) selectedPrompt--;
-                    if (selectedPrompt == -1)
+                    if (selectedPrompt != -1)
                     {
-                        inputField.text = null;
-                        return;
+                        List<string> reversedPrompts = new List<string>(previousPrompts);
+                        reversedPrompts.Reverse();
+                        inputField.text = reversedPrompts[selectedPrompt];
+                        inputField.caretPosition = inputField.text.Length;
                     }
-                    List<string> reversedPrompts = new List<string>(previousPrompts);
-                    reversedPrompts.Reverse();
-                    inputField.text = reversedPrompts[selectedPrompt];
-                    inputField.caretPosition = inputField.text.Length;
+                    else
+                        inputField.text = null;
                 }
             }
+            plugins.ToList().ForEach(x => x.updateAction?.Invoke());
         }
 
         void Awake()
@@ -172,10 +206,10 @@ namespace ChatCommands
             }
             commands.AddRange(new ChatCommand[]
             {
-                new ChatCommand("help",
-                    "Shows list of commands and can look at other commands.",
+                               new ChatCommand("help",
+                    "Shows a list of commands.",
                     "?name(string)",
-                    delegate (ChatCommand _this, string[] args)
+                    (string name, string[] args) =>
                     {
                         StringBuilder sb = new StringBuilder();
                         if (args.Length >= 1)
@@ -183,8 +217,9 @@ namespace ChatCommands
                             ChatCommand cmd = commands.FirstOrDefault(x => x.name == args[0]);
                             if (cmd != null)
                             {
-                                sb.Append($"\nName: {cmd.name}\nDescription: {cmd.description}");
-                                if (cmd.mod != null) sb.Append($"\nMod: {cmd.mod}");
+                                sb.Append($"\nName: {cmd.name}");
+                                if (cmd.description != null) sb.Append($"\nDescription: {cmd.description}");
+                                if (cmd.plugin != null) sb.Append($"\nPlugin: {cmd.plugin.name}");
                                 sb.Append($"\nExample: {cmd.name}");
                                 if (cmd.example != null)
                                 {
@@ -204,21 +239,21 @@ namespace ChatCommands
                             sb.Append($"\nCommands ({commands.Count}):\n");
                             foreach (ChatCommand cmd in commands) sb.Append($"\n{cmd.name}");
                         }
-                        _this.Message(sb.ToString());
+                        Message(sb.ToString(), ChatUtility.Simplify(name));
                     }),
                 new ChatCommand("clear",
                     "Clears the chat.",
                     null,
-                    delegate (ChatCommand _this, string[] _)
+                    (string name, string[] _) =>
                     {
                         previousTexts.Clear();
                         foreach (Transform message in content) Destroy(message.gameObject);
-                        _this.Message("Chat has been cleared!");
+                        Message("Chat has been cleared!", ChatUtility.Simplify(name));
                     }),
-                new ChatCommand("mods",
-                    "Shows a list of mods.",
+                new ChatCommand("plugins",
+                    "Shows a list of plugins.",
                     null,
-                    delegate (ChatCommand _this, string[] _)
+                    (string name,  string[] _) =>
                     {
                         StringBuilder sb = new StringBuilder();
                         BepInPlugin[] pluginInfos = Chainloader.PluginInfos.Values.Select(x => x.Metadata).ToArray();
@@ -228,7 +263,7 @@ namespace ChatCommands
                             BepInPlugin pluginInfo = pluginInfos[i];
                             sb.Append($"\nName: {pluginInfo.Name}\nGUID: {pluginInfo.GUID}\nVersion: {pluginInfo.Version}{((i + 1) != commands.Count ? "\n" : null)}");
                         }
-                        _this.Message(sb.ToString());
+                        Message(sb.ToString(), ChatUtility.Simplify(name));
                     })
             });
             CreateUI();
@@ -310,13 +345,13 @@ namespace ChatCommands
                     {
                         foreach (Delegate del in onInit.GetInvocationList())
                         {
-                            (string, ChatCommand[]) args = ((string, ChatCommand[]))del.DynamicInvoke();
-                            if (instance.mods.Contains(args.Item1)) continue;
-                            instance.mods.Add(args.Item1);
+                            (ChatPlugin, ChatCommand[]) args = ((ChatPlugin, ChatCommand[]))del.DynamicInvoke();
+                            if (plugins.Any(x => x.guid == args.Item1.guid)) continue;
+                            plugins.Add(args.Item1);
                             foreach (ChatCommand cmd in args.Item2)
                             {
-                                cmd.mod = args.Item1;
-                                instance.commands.Add(cmd);
+                                cmd.plugin = args.Item1;
+                                commands.Add(cmd);
                             }
                         }
                     }
