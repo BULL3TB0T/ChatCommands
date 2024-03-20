@@ -54,6 +54,10 @@
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\..\..\..\..\..\Program Files\Unity\Hub\Editor\2022.3.21f1\Editor\Data\Managed\UnityEngine\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\..\Program Files\Unity\Hub\Editor\2022.3.21f1\Editor\Data\Managed\UnityEngine\UnityEngine.TextRenderingModule.dll</HintPath>
+    </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>..\..\..\..\..\..\Program Files\Unity\Hub\Editor\2022.3.21f1\Editor\Data\Resources\PackageManager\ProjectTemplates\libcache\com.unity.template.universal-2d-2.1.2\ScriptAssemblies\UnityEngine.UI.dll</HintPath>
     </Reference>

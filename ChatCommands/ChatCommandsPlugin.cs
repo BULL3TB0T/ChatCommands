@@ -48,14 +48,14 @@ namespace ChatCommands
         public string description;
         public string example;
         public string mod;
-        private Action<ChatCommand, string[]> method;
+        private Action<ChatCommand, string[]> action;
 
-        public ChatCommand(string name, string description, string example, Action<ChatCommand, string[]> method)
+        public ChatCommand(string name, string description, string example, Action<ChatCommand, string[]> action)
         {
             this.name = name;
             this.description = description;
             this.example = example;
-            this.method = method;
+            this.action = action;
         }
 
         public void Message(object text, Color color = default, int size = -1)
@@ -74,7 +74,7 @@ namespace ChatCommands
         {
             try
             {
-                method.Invoke(this, args);
+                action.Invoke(this, args);
             }
             catch (Exception e)
             {
@@ -112,7 +112,7 @@ namespace ChatCommands
 
         void Update()
         {
-            if (!isInitialized && !isCreatingUI) return;
+            if (!isInitialized || isCreatingUI) return;
             if (ChatCommandsPlugin.configModifierEnabled.Value
                 ?
                 (InputManager.GetKey(ChatCommandsPlugin.configModifier.Value) && InputManager.GetKeyDown(ChatCommandsPlugin.configToggle.Value))
@@ -235,6 +235,15 @@ namespace ChatCommands
             SceneManager.activeSceneChanged += delegate { CreateUI(); };
         }
 
+        private void TransformLoop(Transform transform, Action<Transform> action)
+        {
+            foreach (Transform current in transform)
+            {
+                action.Invoke(current);
+                TransformLoop(current, action);
+            }
+        }
+
         private void CreateUI()
         {
             if (isInitialized && assetBundle != null) return;
@@ -250,12 +259,13 @@ namespace ChatCommands
             if (assetBundle == null)
             {
                 ChatCommandsPlugin.logger.LogFatal("An error occured while initializing. " +
-                    "(NOTE) 'Unable to read header from archive file' means you need to update the version of the asset bundle. Or missing file.");
+                    "(NOTE) 'Unable to read header from archive file' means you need to update the version of the asset bundle. Or else file was not found.");
                 return;
             }
             GameObject chat = assetBundle.LoadAsset<GameObject>("Chat");
             GameObject text = assetBundle.LoadAsset<GameObject>("Text");
-            if (chat != null && text != null)
+            Font font = assetBundle.LoadAsset<Font>("Font");
+            if (chat != null && text != null && font != null)
             {
                 chatWindow = Instantiate(chat);
                 chatWindow.transform.SetParent(gameObject.transform);
@@ -266,7 +276,7 @@ namespace ChatCommands
                 canvas = chatWindow.GetComponent<Canvas>();
                 canvas.enabled = false;
                 inputField = window.Find("Input").GetComponent<TMP_InputField>();
-                inputField.onSubmit.AddListener(delegate
+                Action onSubmit = delegate
                 {
                     if (!inputField.text.IsNullOrWhiteSpace())
                     {
@@ -281,8 +291,17 @@ namespace ChatCommands
                     inputField.text = null;
                     inputField.Select();
                     inputField.ActivateInputField();
+                };
+                inputField.onSubmit.AddListener(delegate { onSubmit.Invoke(); });
+                window.Find("Button").GetComponent<Button>().onClick.AddListener(delegate { onSubmit.Invoke(); });
+                TMP_FontAsset fontAsset = TMP_FontAsset.CreateFontAsset(font);
+                TransformLoop(window, (Transform current) =>
+                {
+                    TextMeshProUGUI tmp = current.GetComponent<TextMeshProUGUI>();
+                    if (tmp) tmp.font = fontAsset;
                 });
                 textPrefab = Instantiate(text);
+                textPrefab.GetComponent<TextMeshProUGUI>().font = fontAsset;
                 textPrefab.transform.SetParent(gameObject.transform);
                 if (!isInitialized)
                 {
@@ -308,7 +327,7 @@ namespace ChatCommands
                     ChatMessage[] tempMessages = previousTexts.ToArray();
                     previousTexts.Clear();
                     foreach (ChatMessage message in tempMessages) Message(message.text, message.name, message.color, message.size, message.time);
-                    Message("Reloaded asset bundle after it was unloaded.");
+                    Message("Reloaded asset bundle as it had unexpectedly unloaded.");
                 }
                 isCreatingUI = false;
             }
@@ -320,7 +339,7 @@ namespace ChatCommands
             ChatMessage message = new ChatMessage(text, name, color, size, time);
             previousTexts.Add(message);
             GameObject newText = Instantiate(textPrefab);
-            newText.GetComponent<TMP_Text>().text = $"{message.time.ToLongTimeString()} {message.time.ToShortDateString()} [{message.name}]:" +
+            newText.GetComponent<TMP_Text>().text = $"/// {message.time.ToString("dd/MM/yyyy hh:mm tt")} [{message.name}]:" +
                 $" {ChatUtility.Color(message.color)}{message.text}";
             newText.GetComponent<TMP_Text>().fontSize = message.size;
             newText.transform.SetParent(content);
