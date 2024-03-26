@@ -26,29 +26,41 @@ namespace ChatCommands
         public static string Color(string hexCode) => $"<color=#{hexCode}>";
         public static string Simplify(string name) => string.Join(" ",
             name.Split('_').Select(subName => char.ToUpper(subName[0]) + subName.Substring(1).ToLower()));
+        public static string ToUndercase(string name) => name.Replace(' ', '_').ToLower();
+        public static string ToStrings(this ChatParameter[] parameters) => parameters != null && parameters.Length != 0
+            ? string.Join(" ", parameters.Select(x => x.ToString())) : null;
     }
 
     public class ChatPlugin
     {
-        public string guid;
-        public Action updateAction;
+        public readonly string guid;
+        public readonly ChatCommand[] commands;
+        public readonly Action updateAction;
+        public readonly object[] parsers;
 
-        public ChatPlugin(string guid) => this.guid = guid;
-
-        public ChatPlugin(string guid, Action updateAction)
+        public ChatPlugin(string guid, ChatCommand[] commands, object[] parsers = null)
         {
             this.guid = guid;
+            this.commands = commands;
+            this.parsers = parsers;
+        }
+
+        public ChatPlugin(string guid, ChatCommand[] commands, Action updateAction, object[] parsers = null)
+        {
+            this.guid = guid;
+            this.commands = commands;
             this.updateAction = updateAction;
+            this.parsers = parsers;
         }
     }
 
     public class ChatMessage
     {
-        public object text;
-        public string name;
-        public Color color;
-        public int size;
-        public DateTime time;
+        public readonly object text;
+        public readonly string name;
+        public readonly Color color;
+        public readonly int size;
+        public readonly DateTime time;
 
         public ChatMessage(object text, string name = null, Color color = default, int size = -1, DateTime time = default)
         {
@@ -60,82 +72,279 @@ namespace ChatCommands
         }
     }
 
-    public class ChatCommand
+    public class ChatParameter
     {
-        public string name;
-        public string description;
-        public string example;
-        public ChatPlugin plugin;
-        private Action<string, string[]> executeAction1;
-        private Action<string> executeAction2;
+        protected string name;
+        protected string description;
+        public Type type { get; protected set; }
+        public bool optional { get; protected set; }
 
-        public ChatCommand(string name, Action<string, string[]> executeAction1)
+        public ChatParameter(string name, Type type, bool optional = false)
         {
-            this.name = name.Replace(' ', '_');
-            this.executeAction1 = executeAction1;
+            this.name = ChatUtility.ToUndercase(name);
+            this.type = type;
+            this.optional = optional;
         }
 
-        public ChatCommand(string name, string description, Action<string, string[]> executeAction1)
+        public ChatParameter(string name, string description, Type type, bool optional = false)
         {
-            this.name = name.Replace(' ', '_');
+            this.name = ChatUtility.ToUndercase(name);
             this.description = description;
-            this.executeAction1 = executeAction1;
+            this.type = type;
+            this.optional = optional;
         }
 
-        public ChatCommand(string name, string description, string example, Action<string, string[]> executeAction1)
+        public override string ToString() => $"{(optional ? "?" : null)}{name}[{type.Name}]{(description != null ? $"({description})" : null)}";
+    }
+
+    public class ChatLinkedParameter : ChatParameter
+    {
+        public ChatLinkedParameter(string name, Type type, bool optional = false) : base(name, type, optional)
         {
-            this.name = name.Replace(' ', '_');
+            this.name = ChatUtility.ToUndercase(name);
+            this.type = type;
+            this.optional = optional;
+        }
+
+        public ChatLinkedParameter(string name, string description, Type type, bool optional = false) : base(name, description, type, optional)
+        {
+            this.name = ChatUtility.ToUndercase(name);
             this.description = description;
-            this.example = example;
-            this.executeAction1 = executeAction1;
+            this.type = type;
+            this.optional = optional;
         }
 
-        public ChatCommand(string name, Action<string> executeAction2)
-        {
-            this.name = name.Replace(' ', '_');
-            this.executeAction2 = executeAction2;
-        }
+        public override string ToString() => $"#{base.ToString()}";
+    }
 
-        public ChatCommand(string name, string description, Action<string> executeAction2)
-        {
-            this.name = name.Replace(' ', '_');
-            this.description = description;
-            this.executeAction2 = executeAction2;
-        }
+    public class ChatArguments
+    {
+        private ChatArgument[] arguments;
 
-        public ChatCommand(string name, string description, string example, Action<string> executeAction2)
-        {
-            this.name = name.Replace(' ', '_');
-            this.description = description;
-            this.example = example;
-            this.executeAction2 = executeAction2;
-        }
+        public ChatArguments(ChatArgument[] arguments) => this.arguments = arguments;
 
-        public void Execute(string[] args)
+        public bool TryGetArgument(int index, out ChatArgument argument)
         {
-            try
+            if (index >= 0 && index < arguments.Length)
             {
-                executeAction1?.Invoke(name, args);
-                executeAction2?.Invoke(name);
+                argument = arguments[index];
+                return true;
             }
-            catch (Exception e)
+            else
             {
-                ChatManager.instance.Message(e.ToString(), ChatUtility.Simplify(name), new Color(1, 0, 0));
+                argument = null;
+                return false;
             }
         }
     }
 
-    public class ChatManager : MonoBehaviour
+    public class ChatArgumentException : Exception
     {
-        public static ChatManager instance;
-        private AssetBundle assetBundle;
-        public delegate (ChatPlugin, ChatCommand[]) onInitHandler();
+        public readonly Color color;
+
+        public ChatArgumentException(string message, Color color = default) : base(message) => this.color = color == default ? new Color(1, 1, 1) : color;
+    }
+
+    public class ChatArgumentParser<T>
+    {
+        private Func<int, string, T> parse;
+        public readonly string example;
+        public readonly string plugin;
+
+        public ChatArgumentParser(Func<int, string, T> parse, string example)
+        {
+            this.parse = parse;
+            this.example = example;
+        }
+
+        public T Parse(int index, string text) => parse(index, text);
+    }
+
+    public class ChatArgument
+    {
+        private int index;
+        private Type type;
+        private string value;
+        private string[] values;
+
+        public ChatArgument(int index, Type type, string value)
+        {
+            this.index = index;
+            this.type = type;
+            this.value = value;
+        }
+
+        public ChatArgument(int index, Type type, string[] values)
+        {
+            this.index = index;
+            this.type = type;
+            this.values = values;
+        }
+
+        private T ParseValue<T>(int index, string value)
+        {
+            if (type != typeof(T))
+            {
+                throw new ChatArgumentException(
+                    $"The argument {index} has a type of \"{type.Name}\" instead of the expected type \"{typeof(T).Name}\"", Color.yellow);
+            }
+            T ret;
+            try
+            {
+                ret = (T)Convert.ChangeType(value, type);
+            }
+            catch (InvalidCastException)
+            {
+                Dictionary<Type, object> parsers = (Dictionary<Type, object>)ChatCommandsManager.instance.GetType().GetField("parsers",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(ChatCommandsManager.instance);
+                if (parsers.TryGetValue(typeof(T), out object parser))
+                    ret = ((ChatArgumentParser<T>)parser).Parse(index, value);
+                else
+                    throw new ChatArgumentException($"No parser has been found for type \"{typeof(T).Name}\"", Color.red);
+            }
+            catch (Exception ex)
+            {
+                throw new ChatArgumentException($"Error parsing argument {index}: {ex.Message}", Color.red);
+            }
+            return ret;
+        }
+
+        public T GetValue<T>()
+        {
+            if (values != null)
+                throw new ChatArgumentException("Use GetValues<T>() instead", Color.yellow);
+            return ParseValue<T>(index, value);
+        }
+
+        public T[] GetValues<T>()
+        {
+            if (value != null)
+                throw new ChatArgumentException("Use GetValue<T>() instead", Color.yellow);
+            T[] ret = new T[values.Length];
+            for (int i = 0; i < values.Length; i++)
+                ret[i] = ParseValue<T>(index + i, values[i]);
+            return ret;
+        }
+    }
+
+    public class ChatCommand
+    {
+        public readonly string name;
+        public readonly string description;
+        public readonly ChatParameter[] parameters;
+        private readonly Action<string> executeAction1;
+        private Action<string, ChatArguments> executeAction2;
+        public readonly string plugin;
+
+        public ChatCommand(string name, Action<string> executeAction1)
+        {
+            this.name = ChatUtility.ToUndercase(name);
+            this.executeAction1 = executeAction1;
+        }
+
+        public ChatCommand(string name, string description, Action<string> executeAction1)
+        {
+            this.name = ChatUtility.ToUndercase(name);
+            this.description = description;
+            this.executeAction1 = executeAction1;
+        }
+
+        public ChatCommand(string name, ChatParameter[] parameters, Action<string, ChatArguments> executeAction2)
+        {
+            this.name = ChatUtility.ToUndercase(name);
+            this.parameters = parameters;
+            this.executeAction2 = executeAction2;
+        }
+
+        public ChatCommand(string name, string description, ChatParameter[] parameters, Action<string, ChatArguments> executeAction2)
+        {
+            this.name = ChatUtility.ToUndercase(name);
+            this.description = description;
+            this.parameters = parameters;
+            this.executeAction2 = executeAction2;
+        }
+
+        private bool IsValid()
+        {
+            if (parameters == null) return true;
+            if (parameters.Length == 0) return false;
+            int linkedCount = parameters.Count(x => x.GetType() == typeof(ChatLinkedParameter));
+            if (linkedCount >= 2 || (linkedCount == 1 && parameters.Last().GetType() != typeof(ChatLinkedParameter)))
+                return false;
+            bool isOptionalFound = false;
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                ChatParameter parameter = parameters[i];
+                if (parameter.optional)
+                    isOptionalFound = true;
+                else if (isOptionalFound && !parameter.optional)
+                    return false;
+            }
+            return true;
+        }
+
+        public void Execute(string[] args)
+        {
+            if (!IsValid())
+            {
+                ChatCommandsManager.instance.Message($"Command parameters are invalid", ChatUtility.Simplify(name), Color.red);
+                return;
+            }
+            try
+            {
+                executeAction1?.Invoke(name);
+                if (executeAction2 != null)
+                {
+                    List<ChatArgument> actualArgs = new List<ChatArgument>();
+                    int parameterCount = parameters.Count(x => !x.optional);
+                    if (parameterCount != 0 && parameterCount > args.Length)
+                    {
+                        ChatCommandsManager.instance.Message($"Requires at least {parameterCount} argument(s)", ChatUtility.Simplify(name));
+                        return;
+                    }
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (args.Length > i)
+                        {
+                            ChatParameter parameter = parameters[i];
+                            if (parameter.GetType() == typeof(ChatLinkedParameter))
+                            {
+                                List<string> values = new List<string>();
+                                foreach (string str in args.Skip(i))
+                                    values.Add(str);
+                                actualArgs.Add(new ChatArgument(i + 1, parameter.type, values.ToArray()));
+                            }
+                            else
+                                actualArgs.Add(new ChatArgument(i + 1, parameter.type, args[i]));
+                        }
+                    }
+                    executeAction2.Invoke(name, new ChatArguments(actualArgs.ToArray()));
+                }
+            }
+            catch (ChatArgumentException ex)
+            {
+                ChatCommandsManager.instance.Message(ex.Message, ChatUtility.Simplify(name), ex.color);
+            }
+            catch (Exception ex)
+            {
+                ChatCommandsManager.instance.Message(ex.ToString(), ChatUtility.Simplify(name), Color.red);
+            }
+        }
+    }
+
+    public class ChatCommandsManager : MonoBehaviour
+    {
+        public static ChatCommandsManager instance;
+        public delegate ChatPlugin onInitHandler();
         public static event onInitHandler onInit;
+        private AssetBundle assetBundle;
         private bool isInitialized = false;
         private bool isCreatingUI = false;
 
         private List<ChatPlugin> plugins = new List<ChatPlugin>();
         private List<ChatCommand> commands = new List<ChatCommand>();
+        private Dictionary<string, string[]> duplicateCommands = new Dictionary<string, string[]>();
+        private Dictionary<Type, object> parsers = new Dictionary<Type, object>();
 
         private GameObject chatWindow;
         private Canvas canvas;
@@ -163,37 +372,45 @@ namespace ChatCommands
                 Destroy(gameObject);
                 return;
             }
-            commands.AddRange(new ChatCommand[]
+            new ChatCommand[]
             {
+                new ChatCommand("clear",
+                    "Clears all the messages",
+                    name =>
+                    {
+                        previousTexts.Clear();
+                        foreach (Transform message in content) Destroy(message.gameObject);
+                        Message("Messages has been cleared!", ChatUtility.Simplify(name));
+                    }),
                 new ChatCommand("help",
-                    "Shows a list of commands.",
-                    "?command(string)",
-                    (string name, string[] args) =>
+                    "Shows a list of commands",
+                    new ChatParameter[] { new ChatParameter("command", typeof(string), true) },
+                    (name, args) =>
                     {
                         StringBuilder sb = new StringBuilder();
-                        if (args.Length >= 1)
+                        if (args.TryGetArgument(0, out ChatArgument argument))
                         {
-                            ChatCommand cmd = commands.FirstOrDefault(x => x.name == args[0]);
+                            string text = argument.GetValue<string>();
+                            ChatCommand cmd = commands.FirstOrDefault(x => x.name == text);
                             if (cmd != null)
                             {
                                 sb.Append($"\nName: {cmd.name}");
                                 if (cmd.description != null) sb.Append($"\nDescription: {cmd.description}");
-                                if (cmd.plugin != null) sb.Append($"\nPlugin: {cmd.plugin.guid}");
-                                if (cmd.example != null)
+                                if (cmd.plugin != null) sb.Append($"\nPlugin: {cmd.plugin}");
+                                if (cmd.parameters != null)
                                 {
-                                    sb.Append($"\nExample: {cmd.name} {cmd.example}");
-                                    if (cmd.example.Contains("?")) sb.Append($"\n{ChatUtility.Color(Color.yellow)}? means optional.");
-                                    if (cmd.example.Contains("#")) sb.Append($"\n{ChatUtility.Color(Color.yellow)}# means arguments are connected after this.");
-                                    if (cmd.example.Contains("(") && cmd.example.Contains(")"))
-                                        sb.Append($"\n{ChatUtility.Color(Color.yellow)}() means what type the argument is.");
-                                    if (cmd.example.Contains("{") && cmd.example.Contains("}"))
-                                        sb.Append($"\n{ChatUtility.Color(Color.yellow)}{{}} means comment.");
-                                    if (cmd.example.Contains("[") && cmd.example.Contains("]"))
-                                        sb.Append($"\n{ChatUtility.Color(Color.yellow)}[] means how the argument should be.");
+                                    string parameters = cmd.parameters.ToStrings();
+                                    sb.Append($"\nParameters: {parameters}");
+                                    if (parameters.Contains("?")) sb.Append($"\n{ChatUtility.Color(Color.yellow)}? means optional");
+                                    if (parameters.Contains("#")) sb.Append($"\n{ChatUtility.Color(Color.yellow)}# means the following arguments are linked");
+                                    if (parameters.Contains("(") && parameters.Contains(")"))
+                                        sb.Append($"\n{ChatUtility.Color(Color.yellow)}{{}} shows a description");
+                                    if (parameters.Contains("[") && parameters.Contains("]"))
+                                        sb.Append($"\n{ChatUtility.Color(Color.yellow)}[] shows what type it is");
                                 }
                             }
                             else
-                                sb.Append($"Command called '{args[0]}' does not exist.");
+                                sb.Append($"Command called \"{text}\" does not exist");
                         }
                         else
                         {
@@ -202,16 +419,60 @@ namespace ChatCommands
                         }
                         Message(sb.ToString(), ChatUtility.Simplify(name));
                     }),
-                new ChatCommand("clear",
-                    "Clears all the messages.",
-                    name =>
+                new ChatCommand("parsers",
+                    "Shows a list of parsers",
+                    new ChatParameter[] { new ChatParameter("type", typeof(string), true), new ChatParameter("input", typeof(string), true) },
+                    (name, args) =>
                     {
-                        previousTexts.Clear();
-                        foreach (Transform message in content) Destroy(message.gameObject);
-                        Message("Messages has been cleared!", ChatUtility.Simplify(name));
+                        StringBuilder sb = new StringBuilder();
+                        if (args.TryGetArgument(0, out ChatArgument arg0))
+                        {
+                            string text = arg0.GetValue<string>();
+                            Type type = parsers.Select(x => x.Key).FirstOrDefault(x => x.Name == text);
+                            if (type != null && parsers.TryGetValue(type, out object parser))
+                            {
+                                if (args.TryGetArgument(1, out ChatArgument arg1))
+                                {
+                                    string exceptionMessage = null;
+                                    try
+                                    {
+                                        parser.GetType().GetMethod("Parse").Invoke(parser, new object[] { 2, arg1.GetValue<string>() });
+                                    }
+                                    catch (TargetInvocationException ex)
+                                    {
+                                        Exception innerEx = ex.InnerException;
+                                        if (innerEx.GetType() == typeof(ChatArgumentException))
+                                            exceptionMessage = innerEx.Message;
+                                        else
+                                            exceptionMessage = "Something went wrong";
+                                    }
+                                    sb.Append(exceptionMessage != null ? exceptionMessage : "Valid");
+                                }
+                                else
+                                {
+                                    sb.Append($"\nName: {type.Name}" +
+                                    $"\nExample: {parser.GetType().GetField("example").GetValue(parser)}");
+                                    string plugin = (string)parser.GetType().GetField("plugin").GetValue(parser);
+                                    if (plugin != null) sb.Append($"\nPlugin: {plugin}");
+                                }
+                            }
+                            else
+                                sb.Append($"Parser with type \"{text}\" does not exist");
+                        }
+                        else
+                        {
+                            if (parsers.Count == 0)
+                                sb.Append("No parsers has been found");
+                            else
+                            {
+                                sb.Append($"\nParsers ({parsers.Count}):\n");
+                                parsers.ToList().ForEach(x => sb.Append($"\n{x.Key.Name}"));
+                            }
+                        }
+                        Message(sb.ToString(), ChatUtility.Simplify(name));
                     }),
                 new ChatCommand("plugins",
-                    "Shows a list of plugins.",
+                    "Shows a list of plugins",
                     name =>
                     {
                         StringBuilder sb = new StringBuilder();
@@ -223,13 +484,18 @@ namespace ChatCommands
                             sb.Append($"\nName: {pluginInfo.Name}\n" +
                                 $"GUID: {pluginInfo.GUID}\n" +
                                 $"Version: {pluginInfo.Version}\n" +
-                                $"Dependency: {(plugins.Any(x => x.guid == pluginInfo.GUID) ? "Yes" : "No")}{(i != (commands.Count - 1) ? "\n" : null)}");
+                                $"Dependency: {(plugins.Any(x => x.guid == pluginInfo.GUID) ? "Yes" : "No")}" +
+                                $"{(i != (pluginInfos.Length - 1) ? "\n" : null)}");
                         }
                         Message(sb.ToString(), ChatUtility.Simplify(name));
                     })
+            }.ToList().ForEach(x =>
+            {
+                DuplicateCheck(x);
+                commands.Add(x);
             });
-            CreateUI();
-            SceneManager.activeSceneChanged += delegate { CreateUI(); };
+            Create();
+            SceneManager.activeSceneChanged += delegate { Create(); };
         }
 
         void Update()
@@ -292,7 +558,7 @@ namespace ChatCommands
             plugins.ToList().ForEach(x => x.updateAction?.Invoke());
         }
 
-        private void CreateUI()
+        private void Create()
         {
             if (isInitialized && assetBundle != null) return;
             isCreatingUI = true;
@@ -307,7 +573,7 @@ namespace ChatCommands
             if (assetBundle == null)
             {
                 ChatCommandsPlugin.logger.LogFatal("An error occured while creating the UI. " +
-                    "(NOTE) 'Unable to read header from archive file' means you need to update the version of the asset bundle. Or else file was not found.");
+                    "(NOTE) 'Unable to read header from archive file' means you need to update the version of the asset bundle. Or else file was not found");
                 return;
             }
             GameObject chat = assetBundle.LoadAsset<GameObject>("Chat");
@@ -334,7 +600,7 @@ namespace ChatCommands
                         string[] args = trim.Split(' ').Where(x => !x.IsNullOrWhiteSpace()).ToArray();
                         ChatCommand cmd = commands.FirstOrDefault(x => x.name == args[0]);
                         if (cmd != null) cmd.Execute(args.Skip(1).ToArray());
-                        else Message($"Command called '{args[0]}' does not exist.");
+                        else Message($"Command called \"{args[0]}\" does not exist");
                     }
                     selectedPrompt = -1;
                     inputField.text = null;
@@ -376,25 +642,30 @@ namespace ChatCommands
                         }
                         if (closestCmd != null)
                         {
-                            string autoCompleteText = closestCmd.name;
-                            string exampleText = closestCmd.example;
-                            if (exampleText != null)
+                            string name = closestCmd.name;
+                            string parameters = closestCmd.parameters.ToStrings();
+                            if (parameters != null)
                             {
-                                if (inputField.text.Length >= autoCompleteText.Length)
+                                if (inputField.text.Length >= name.Length)
                                 {
-                                    autoCompleteText = null;
-                                    string[] exampleArgs = Regex.Split(exampleText,
-                                        @"\s(?![^\[\]\{\}\(\)]*(?:\]|\}|\)))").Where(x => !x.IsNullOrWhiteSpace()).ToArray();
-                                    exampleArgs = exampleArgs.Skip(args.Length - 1).ToArray();
-                                    exampleText = inputField.text;
-                                    for (int i = 0; i < exampleArgs.Length; i++)
-                                        exampleText += $"{((i != 0 || inputField.text[caretPosition] != ' ') ? " " : "")}" +
-                                        $"{exampleArgs[i]}";
+                                    name = null;
+                                    string[] splitParameters = Regex.Split(parameters,
+                                        @"\s(?![^\[\]\(\)]*(?:\]|\)))").Where(x => !x.IsNullOrWhiteSpace()).ToArray();
+                                    string lastParameter = splitParameters[splitParameters.Length - 1];
+                                    splitParameters = splitParameters.Skip(args.Length - 1).ToArray();
+                                    parameters = inputField.text;
+                                    if (splitParameters.Length != 0)
+                                    {
+                                        for (int i = 0; i < splitParameters.Length; i++)
+                                            parameters += $"{((i != 0 || inputField.text[caretPosition] != ' ') ? " " : "")}{splitParameters[i]}";
+                                    }
+                                    else if (closestCmd.parameters.Last().GetType() == typeof(ChatLinkedParameter))
+                                        parameters += $"{(inputField.text[caretPosition] != ' ' ? " " : "")}{lastParameter}";
                                 }
                                 else
-                                    exampleText = $" {exampleText}";
+                                    parameters = $" {parameters}";
                             }
-                            autoComplete.text = autoCompleteText + exampleText;
+                            autoComplete.text = name + parameters;
                         }
                     }
                 });
@@ -413,7 +684,7 @@ namespace ChatCommands
                     scrollRect.verticalNormalizedPosition = 1f;
                 });
                 top.gameObject.transform.Find("Text").GetComponent<TextMeshProUGUI>().font = fontAsset;
-                TransformLoop(window, (Transform current) =>
+                IterateTransform(window, (Transform current) =>
                 {
                     TextMeshProUGUI textMesh = current.GetComponent<TextMeshProUGUI>();
                     if (textMesh) textMesh.font = fontAsset;
@@ -424,28 +695,51 @@ namespace ChatCommands
                 if (!isInitialized)
                 {
                     isInitialized = true;
-                    ChatCommandsPlugin.logger.LogMessage($"{ChatCommandsPlugin.modName} has been initialized.".ToString());
+                    ChatCommandsPlugin.logger.LogMessage($"{ChatCommandsPlugin.modName} has been initialized".ToString());
                     if (onInit != null)
                     {
                         foreach (var method in onInit.GetInvocationList())
                         {
-                            (ChatPlugin plugin, ChatCommand[] customCommands) = ((ChatPlugin, ChatCommand[]))method.DynamicInvoke();
-                            if (!Chainloader.PluginInfos.Values.Any(x => x.Metadata.GUID == plugin.guid)) continue;
-                            if (plugins.Any(x => x.guid == plugin.guid)) continue;
-                            if (customCommands.Length == 0) continue;
-                            plugins.Add(plugin);
-                            foreach (ChatCommand cmd in customCommands)
+                            ChatPlugin plugin = (ChatPlugin)method.DynamicInvoke();
+                            bool shouldContinue = false;
+                            if (!Chainloader.PluginInfos.Values.Any(x => x.Metadata.GUID == plugin.guid)) shouldContinue = true;
+                            if (plugins.Any(x => x.guid == plugin.guid)) shouldContinue = true;
+                            if (plugin.commands.Length == 0) shouldContinue = true;
+                            if (plugin.parsers != null && plugin.parsers.Length != 0)
                             {
-                                cmd.plugin = plugin;
-                                int count = commands.Count(x => x.name == cmd.name);
-                                if (count > 0)
+                                foreach (object parser in plugin.parsers)
                                 {
-                                    string oldName = cmd.name;
-                                    cmd.name = $"{cmd.name}_{count}";
-                                    Message($"Duplicate found with name \"{oldName}\" from plugin \"{plugin.guid}\" ({cmd.name})");
+                                    Type type = parser.GetType();
+                                    if (!type.IsGenericType || type.GetGenericTypeDefinition() != typeof(ChatArgumentParser<>)
+                                        || type.GetGenericArguments().Length != 1)
+                                    {
+                                        shouldContinue = true;
+                                    }
                                 }
+                            }
+                            if (shouldContinue) continue;
+                            foreach (ChatCommand cmd in plugin.commands)
+                            {
+                                DuplicateCheck(cmd);
+                                cmd.GetType().GetField("plugin").SetValue(cmd, plugin.guid);
                                 commands.Add(cmd);
                             }
+                            plugin.GetType().GetField("commands").SetValue(plugin, null);
+                            if (plugin.parsers != null && plugin.parsers.Length != 0)
+                            {
+                                foreach (object parser in plugin.parsers)
+                                {
+                                    Type genericType = parser.GetType().GetGenericArguments()[0];
+                                    if (parsers.ContainsKey(genericType)) continue;
+                                    object instance = Activator.CreateInstance(typeof(ChatArgumentParser<>).MakeGenericType(genericType),
+                                        parser.GetType().GetField("parse", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(parser),
+                                        parser.GetType().GetField("example").GetValue(parser));
+                                    instance.GetType().GetField("plugin").SetValue(instance, plugin.guid);
+                                    parsers.Add(genericType, instance);
+                                }
+                            }
+                            plugin.GetType().GetField("parsers").SetValue(plugin, null);
+                            plugins.Add(plugin);
                         }
                     }
                 }
@@ -454,23 +748,46 @@ namespace ChatCommands
                     ChatMessage[] tempMessages = previousTexts.ToArray();
                     previousTexts.Clear();
                     tempMessages.ToList().ForEach(x => Message(x.text, x.name, x.color, x.size, x.time));
-                    Message("Reloaded asset bundle as it had unexpectedly unloaded.");
+                    Message("Reloaded asset bundle as it had unexpectedly unloaded", null, Color.yellow);
                 }
                 isCreatingUI = false;
             }
-            else ChatCommandsPlugin.logger.LogFatal("Failed to load essential GameObjects from the asset bundle.");
+            else
+                ChatCommandsPlugin.logger.LogFatal("Failed to load essential GameObjects from the asset bundle");
         }
 
-        public void Message(object text, string name = null, Color color = default, int size = -1, DateTime time = default)
+        private void DuplicateCheck(ChatCommand cmd)
         {
-            ChatMessage message = new ChatMessage(text, name, color, size, time);
-            previousTexts.Add(message);
-            GameObject newText = Instantiate(textPrefab);
-            newText.GetComponent<TMP_Text>().text = $"/// {message.time:dd/MM/yyyy hh:mm:ss tt} [{message.name}]:" +
-                $" {ChatUtility.Color(message.color)}{message.text}";
-            newText.GetComponent<TMP_Text>().fontSize = message.size;
-            newText.transform.SetParent(content);
-            ScrollToBottom();
+            if (!instance.commands.Any(x => x.name == cmd.name)) return;
+            string currentName = cmd.name;
+            foreach (KeyValuePair<string, string[]> pair in duplicateCommands)
+            {
+                foreach (string name in pair.Value)
+                {
+                    if (currentName == name)
+                    {
+                        currentName = pair.Key;
+                        break;
+                    }
+                }
+            }
+            int index = 1;
+            string newName;
+            if (duplicateCommands.TryGetValue(currentName, out string[] commands))
+            {
+                index = commands.Length + 1;
+                newName = string.Format("{0}_{1}", currentName, index);
+                duplicateCommands[cmd.name] = new List<string>(commands)
+                {
+                    string.Format("{0}_{1}", currentName, index)
+                }.ToArray();
+            }
+            else
+            {
+                newName = string.Format("{0}_{1}", currentName, index);
+                duplicateCommands.Add(cmd.name, new string[] { newName });
+            }
+            cmd.GetType().GetField("name").SetValue(cmd, newName);
         }
 
         private void ScrollToBottom()
@@ -479,13 +796,25 @@ namespace ChatCommands
             scrollRect.verticalNormalizedPosition = 0f;
         }
 
-        private void TransformLoop(Transform transform, Action<Transform> action)
+        private void IterateTransform(Transform transform, Action<Transform> action)
         {
             foreach (Transform current in transform)
             {
                 action.Invoke(current);
-                TransformLoop(current, action);
+                IterateTransform(current, action);
             }
+        }
+
+        public void Message(object text, string name = null, Color color = default, int size = -1, DateTime time = default)
+        {
+            ChatMessage message = new ChatMessage(text, name, color, size, time);
+            previousTexts.Add(message);
+            GameObject newText = Instantiate(textPrefab);
+            newText.GetComponent<TMP_Text>().text = $"//// {message.time:dd/MM/yyyy hh:mm:ss tt} [{message.name}]:" +
+                $" {ChatUtility.Color(message.color)}{message.text}";
+            newText.GetComponent<TMP_Text>().fontSize = message.size;
+            newText.transform.SetParent(content);
+            ScrollToBottom();
         }
     }
 }
@@ -495,7 +824,7 @@ public class ChatCommandsPlugin : BaseUnityPlugin
 {
     internal const string modGUID = "BULLETBOT.ChatCommands";
     internal const string modName = "Chat Commands";
-    private const string modVer = "2.3.9";
+    private const string modVer = "3.1.2";
 
     public static ManualLogSource logger;
 
@@ -519,8 +848,8 @@ public class ChatCommandsPlugin : BaseUnityPlugin
         {
             GameObject manager = new GameObject();
             DontDestroyOnLoad(manager);
-            manager.name = "ChatCommandsManager";
-            ChatManager chat = manager.AddComponent<ChatManager>();
+            manager.name = "Chat Commands";
+            ChatCommandsManager chat = manager.AddComponent<ChatCommandsManager>();
         });
     }
 }
