@@ -573,7 +573,8 @@ namespace ChatCommands
             if (assetBundle == null)
             {
                 ChatCommandsPlugin.logger.LogFatal("An error occured while creating the UI. " +
-                    "(NOTE) 'Unable to read header from archive file' means you need to update the version of the asset bundle. Or else file was not found");
+                    "(NOTE) 'Unable to read header from archive file' means" +
+                    " you need to change the version of the asset bundle same as the unity game version. Or else file was not found");
                 return;
             }
             GameObject chat = assetBundle.LoadAsset<GameObject>("Chat");
@@ -779,7 +780,7 @@ namespace ChatCommands
                 newName = string.Format("{0}_{1}", currentName, index);
                 duplicateCommands[cmd.name] = new List<string>(commands)
                 {
-                    string.Format("{0}_{1}", currentName, index)
+                    newName
                 }.ToArray();
             }
             else
@@ -810,7 +811,7 @@ namespace ChatCommands
             ChatMessage message = new ChatMessage(text, name, color, size, time);
             previousTexts.Add(message);
             GameObject newText = Instantiate(textPrefab);
-            newText.GetComponent<TMP_Text>().text = $"//// {message.time:dd/MM/yyyy hh:mm:ss tt} [{message.name}]:" +
+            newText.GetComponent<TMP_Text>().text = $"//// {message.time.ToString("dd/MM/yyyy hh:mm:ss tt").ToUpper()} [{message.name}]:" +
                 $" {ChatUtility.Color(message.color)}{message.text}";
             newText.GetComponent<TMP_Text>().fontSize = message.size;
             newText.transform.SetParent(content);
